@@ -1,13 +1,21 @@
-"""
-An extension of the `Trader` class with helper functions to make
-life easier.
-"""
-
-from datamodel import Product, Order, TradingState
-import jsonpickle
-
-# You should not copy this import over to `solution.py`.
+##### LOGGER #####
 from core.logger import logger
+##### LOGGER #####
+##### CONFIG #####
+CONFIG = {}
+##### CONFIG #####
+
+"""
+Check the calculation of PnL and the behavior of the matching engine.
+It is known that unfilled orders are cancelled at the end of the
+timestamp; I didn't bother checking this, assumed it is true.
+"""
+
+
+from datamodel import Time, Product, Symbol, Position, UserId, \
+    ObservationValue, Listing, Observation, Order, OrderDepth, \
+    Trade, TradingState, ProsperityEncoder
+import jsonpickle
 
 
 class BaseTrader:
@@ -305,3 +313,38 @@ class TutorialTrader(BaseTrader):
             self.data = ""
         logger.flush(state, self.orders_to_send, 0, self.data)  # no conversions this round
         return self.orders_to_send, 0, self.data
+
+
+class Trader(TutorialTrader):
+    def trade_emeralds(self):
+        fair_price = 10000
+
+        # Market make on both sides if spreads are wide enough.
+        # Here we rely on the observation that the price levels are
+        # always either 9992, 10000, or 10008.
+
+        best_bid = self.best_bid("EMERALDS")
+        if best_bid is not None and best_bid < fair_price:
+            self.send_buy_order("EMERALDS", best_bid + 1,
+                                self.max_buy_orders_left("EMERALDS"))
+        elif best_bid is not None and best_bid == fair_price \
+        and self.position["EMERALDS"] > 20:
+            # If the position has deviated a lot from 0, we balance it
+            # by selling at the fair price (no profit but less risk).
+            # NOTE: the number 20 was chosen randomly; can be tuned,
+            # but this is a tutorial round so no need.
+            self.send_sell_order("EMERALDS", fair_price,
+                                 self.max_sell_orders_left("EMERALDS"))
+
+        best_ask = self.best_ask("EMERALDS")
+        if best_ask is not None and best_ask > fair_price:
+            self.send_sell_order("EMERALDS", best_ask - 1,
+                                 self.max_sell_orders_left("EMERALDS"))
+        elif best_ask is not None and best_ask == fair_price \
+        and self.position["EMERALDS"] < -20:
+            # Same logic as above for balancing.
+            self.send_buy_order("EMERALDS", fair_price,
+                                self.max_buy_orders_left("EMERALDS"))
+
+    def _run(self):
+        self.trade_emeralds()

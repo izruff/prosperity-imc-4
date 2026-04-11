@@ -1,13 +1,21 @@
-"""
-An extension of the `Trader` class with helper functions to make
-life easier.
-"""
-
-from datamodel import Product, Order, TradingState
-import jsonpickle
-
-# You should not copy this import over to `solution.py`.
+##### LOGGER #####
 from core.logger import logger
+##### LOGGER #####
+##### CONFIG #####
+CONFIG = {}
+##### CONFIG #####
+
+"""
+Check the calculation of PnL and the behavior of the matching engine.
+It is known that unfilled orders are cancelled at the end of the
+timestamp; I didn't bother checking this, assumed it is true.
+"""
+
+
+from datamodel import Time, Product, Symbol, Position, UserId, \
+    ObservationValue, Listing, Observation, Order, OrderDepth, \
+    Trade, TradingState, ProsperityEncoder
+import jsonpickle
 
 
 class BaseTrader:
@@ -113,24 +121,16 @@ class TutorialTrader(BaseTrader):
         The maximum number of buy orders we can still place for the
         given product, such that position limits are not violated.
         """
-        # It shouldn't be negative but just in case...
-        value = self.pos_limits[product] - self.position[product] - \
+        return self.pos_limits[product] - self.position[product] - \
             sum(qty for _, qty in self.buy_orders_am[product])
-        if value < 0:
-            logger.print(f"WARNING: bug in max_buy_orders_left")
-        return max(0, value)
 
     def max_sell_orders_left(self, product: Product):
         """
         The maximum number of sell orders we can still place for the
         given product, such that position limits are not violated.
         """
-        # It shouldn't be negative but just in case... we use max().
-        value = self.pos_limits[product] + self.position[product] - \
+        return self.pos_limits[product] + self.position[product] - \
             sum(qty for _, qty in self.sell_orders_am[product])
-        if value < 0:
-            logger.print(f"WARNING: bug in max_sell_orders_left")
-        return max(0, value)
 
     def best_bid(self, product: Product):
         """This is AFTER MATCHING."""
@@ -305,3 +305,15 @@ class TutorialTrader(BaseTrader):
             self.data = ""
         logger.flush(state, self.orders_to_send, 0, self.data)  # no conversions this round
         return self.orders_to_send, 0, self.data
+
+
+class Trader(TutorialTrader):
+    def trade_emeralds(self):
+        fair_price = 10000
+
+        # Match with every order that's better than the fair price.
+        self.match_buy_with_sell("EMERALDS", fair_price)
+        self.match_sell_with_buy("EMERALDS", fair_price)
+
+    def _run(self):
+        self.trade_emeralds()

@@ -1,13 +1,158 @@
 """
-An extension of the `Trader` class with helper functions to make
-life easier.
+Special logger class to allow the backtester tool (credit to @jmerle)
+to capture logs.
 """
 
-from datamodel import Product, Order, TradingState
-import jsonpickle
 
-# You should not copy this import over to `solution.py`.
-from core.logger import logger
+from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+from typing import List, Any
+import json
+
+
+class Logger:
+    def __init__(self) -> None:
+        self.logs = ""
+        self.max_log_length = 3750
+
+    def print(self, *objects: Any, sep: str = " ", end: str = "\n") -> None:
+        self.logs += sep.join(map(str, objects)) + end
+
+    def flush(self, state: TradingState, orders: dict[Symbol, list[Order]], conversions: int, trader_data: str) -> None:
+        base_length = len(
+            self.to_json(
+                [
+                    self.compress_state(state, ""),
+                    self.compress_orders(orders),
+                    conversions,
+                    "",
+                    "",
+                ]
+            )
+        )
+
+        # We truncate state.traderData, trader_data, and self.logs to the same max. length to fit the log limit
+        max_item_length = (self.max_log_length - base_length) // 3
+
+        print(
+            self.to_json(
+                [
+                    self.compress_state(state, self.truncate(state.traderData, max_item_length)),
+                    self.compress_orders(orders),
+                    conversions,
+                    self.truncate(trader_data, max_item_length),
+                    self.truncate(self.logs, max_item_length),
+                ]
+            )
+        )
+
+        self.logs = ""
+
+    def compress_state(self, state: TradingState, trader_data: str) -> list[Any]:
+        return [
+            state.timestamp,
+            trader_data,
+            self.compress_listings(state.listings),
+            self.compress_order_depths(state.order_depths),
+            self.compress_trades(state.own_trades),
+            self.compress_trades(state.market_trades),
+            state.position,
+            self.compress_observations(state.observations),
+        ]
+
+    def compress_listings(self, listings: dict[Symbol, Listing]) -> list[list[Any]]:
+        compressed = []
+        for listing in listings.values():
+            compressed.append([listing.symbol, listing.product, listing.denomination])
+
+        return compressed
+
+    def compress_order_depths(self, order_depths: dict[Symbol, OrderDepth]) -> dict[Symbol, list[Any]]:
+        compressed = {}
+        for symbol, order_depth in order_depths.items():
+            compressed[symbol] = [order_depth.buy_orders, order_depth.sell_orders]
+
+        return compressed
+
+    def compress_trades(self, trades: dict[Symbol, list[Trade]]) -> list[list[Any]]:
+        compressed = []
+        for arr in trades.values():
+            for trade in arr:
+                compressed.append(
+                    [
+                        trade.symbol,
+                        trade.price,
+                        trade.quantity,
+                        trade.buyer,
+                        trade.seller,
+                        trade.timestamp,
+                    ]
+                )
+
+        return compressed
+
+    def compress_observations(self, observations: Observation) -> list[Any]:
+        conversion_observations = {}
+        for product, observation in observations.conversionObservations.items():
+            conversion_observations[product] = [
+                observation.bidPrice,
+                observation.askPrice,
+                observation.transportFees,
+                observation.exportTariff,
+                observation.importTariff,
+                observation.sugarPrice,
+                observation.sunlightIndex,
+            ]
+
+        return [observations.plainValueObservations, conversion_observations]
+
+    def compress_orders(self, orders: dict[Symbol, list[Order]]) -> list[list[Any]]:
+        compressed = []
+        for arr in orders.values():
+            for order in arr:
+                compressed.append([order.symbol, order.price, order.quantity])
+
+        return compressed
+
+    def to_json(self, value: Any) -> str:
+        return json.dumps(value, cls=ProsperityEncoder, separators=(",", ":"))
+
+    def truncate(self, value: str, max_length: int) -> str:
+        lo, hi = 0, min(len(value), max_length)
+        out = ""
+
+        while lo <= hi:
+            mid = (lo + hi) // 2
+
+            candidate = value[:mid]
+            if len(candidate) < len(value):
+                candidate += "..."
+
+            encoded_candidate = json.dumps(candidate)
+
+            if len(encoded_candidate) <= max_length:
+                out = candidate
+                lo = mid + 1
+            else:
+                hi = mid - 1
+
+        return out
+
+
+logger = Logger()
+
+CONFIG = {'mm': 35}
+
+"""
+Check the calculation of PnL and the behavior of the matching engine.
+It is known that unfilled orders are cancelled at the end of the
+timestamp; I didn't bother checking this, assumed it is true.
+"""
+
+
+from datamodel import Time, Product, Symbol, Position, UserId, \
+    ObservationValue, Listing, Observation, Order, OrderDepth, \
+    Trade, TradingState, ProsperityEncoder
+import jsonpickle
 
 
 class BaseTrader:
@@ -113,24 +258,16 @@ class TutorialTrader(BaseTrader):
         The maximum number of buy orders we can still place for the
         given product, such that position limits are not violated.
         """
-        # It shouldn't be negative but just in case...
-        value = self.pos_limits[product] - self.position[product] - \
+        return self.pos_limits[product] - self.position[product] - \
             sum(qty for _, qty in self.buy_orders_am[product])
-        if value < 0:
-            logger.print(f"WARNING: bug in max_buy_orders_left")
-        return max(0, value)
 
     def max_sell_orders_left(self, product: Product):
         """
         The maximum number of sell orders we can still place for the
         given product, such that position limits are not violated.
         """
-        # It shouldn't be negative but just in case... we use max().
-        value = self.pos_limits[product] + self.position[product] - \
+        return self.pos_limits[product] + self.position[product] - \
             sum(qty for _, qty in self.sell_orders_am[product])
-        if value < 0:
-            logger.print(f"WARNING: bug in max_sell_orders_left")
-        return max(0, value)
 
     def best_bid(self, product: Product):
         """This is AFTER MATCHING."""
@@ -305,3 +442,23 @@ class TutorialTrader(BaseTrader):
             self.data = ""
         logger.flush(state, self.orders_to_send, 0, self.data)  # no conversions this round
         return self.orders_to_send, 0, self.data
+
+
+class Trader(TutorialTrader):
+    def trade_emeralds(self):
+        fair_price = 10000
+
+        # Market make on both sides if spreads are wide enough.
+        # Here we rely on the observation that the price levels are
+        # always either 9992, 10000, or 10008.
+
+        best_bid = self.best_bid("EMERALDS")
+        if best_bid is not None and best_bid < fair_price:
+            self.send_buy_order("EMERALDS", best_bid + 1, CONFIG["mm"])
+
+        best_ask = self.best_ask("EMERALDS")
+        if best_ask is not None and best_ask > fair_price:
+            self.send_sell_order("EMERALDS", best_ask - 1, CONFIG["mm"])
+
+    def _run(self):
+        self.trade_emeralds()
