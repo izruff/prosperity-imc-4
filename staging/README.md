@@ -41,4 +41,30 @@ where:
 - `name` is what you want to name the script, and
 - `use_config` is 1 if you want to use `config.py`, else 0.
 
-This will generate the script(s) in `build/` and also copy them to a new directory under `versions/`. The names will be prefixed with a `%d%H%M%S` timestamp to guarantee uniqueness and automatic ordering. After testing, please upload relevant testing results (graphs, logs, your own notes, etc.) to this version directory.
+This will generate the script(s) in `build/` and also copy them to a new directory under `versions/`. The names will be prefixed with a `%d%H%M%S` timestamp to guarantee uniqueness and automatic ordering. It will also be run against some very basic dummy data (from the data capsule), just to check for very basic mistakes.
+
+After testing, please upload relevant testing results (graphs, logs, your own notes, etc.) to this version directory.
+
+## Final submission
+
+To avoid unexpected issues with runtime errors, we have another script to generate the script:
+
+```
+uv run final.py [path to your submission file]
+```
+
+Note that it is `submission.py`, NOT `solution.py`. It is recommended to just run
+
+```
+uv run final.py versions/[...]/submission.py
+```
+
+This script does a few things:
+
+- Do some tests (which are more complex than the ones in `submit.py`).
+
+- Remove the original `Logger` class, and replace it with a dummy `Logger` class that defines `print` and `flush` but does nothing. This is to avoid bugs potentially caused by `Logger`.
+
+- Replace all `raise e` statements in with `return [], 0, ""`. These statements were meant to catch unexpected bugs during `run()`.
+
+- If successful, copies the resulting file in `build/[round_name]_FINAL.py` and `versions/[round_name]/FINAL.py`.

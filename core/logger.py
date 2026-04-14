@@ -9,6 +9,7 @@ from typing import List, Any
 import json
 
 
+##### LOGGER REPLACE FOR FINAL SUBMISSION #####
 class Logger:
     def __init__(self) -> None:
         self.logs = ""
@@ -136,6 +137,7 @@ class Logger:
                 hi = mid - 1
 
         return out
+##### LOGGER REPLACE FOR FINAL SUBMISSION #####
 
 
 logger = Logger()

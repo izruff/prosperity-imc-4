@@ -1,13 +1,21 @@
-"""
-An extension of the `Trader` class with helper functions to make
-life easier.
-"""
-
-from datamodel import Product, Order, TradingState
-import jsonpickle
-
-# You should not copy this import over to `solution.py`.
+##### LOGGER #####
 from core.logger import logger
+##### LOGGER #####
+##### CONFIG #####
+CONFIG = {}
+##### CONFIG #####
+
+"""
+Check the calculation of PnL and the behavior of the matching engine.
+It is known that unfilled orders are cancelled at the end of the
+timestamp; I didn't bother checking this, assumed it is true.
+"""
+
+
+from datamodel import Time, Product, Symbol, Position, UserId, \
+    ObservationValue, Listing, Observation, Order, OrderDepth, \
+    Trade, TradingState, ProsperityEncoder
+import jsonpickle
 
 
 class BaseTrader:
@@ -308,3 +316,8 @@ class TutorialTrader(BaseTrader):
             return self.orders_to_send, 0, self.data
         except Exception as e:
             raise e  ##### RAISE REPLACE FOR FINAL SUBMISSION #####
+
+
+class Trader(TutorialTrader):
+    def _run(self):
+        pass
