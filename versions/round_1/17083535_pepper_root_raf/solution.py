@@ -1,306 +1,16 @@
-"""
-An extension of the `Trader` class with helper functions to make
-life easier.
-"""
+##### LOGGER #####
+from core.logger import logger
+##### LOGGER #####
+##### CONFIG #####
+CONFIG = {}
+##### CONFIG #####
 
-from datamodel import Product, Order, TradingState
+
+from datamodel import Time, Product, Symbol, Position, UserId, \
+    ObservationValue, Listing, Observation, Order, OrderDepth, \
+    Trade, TradingState, ProsperityEncoder
 import jsonpickle
 
-# You should not copy this import over to `solution.py`.
-from core.logger import logger
-
-
-class BaseTrader:
-    def load_state(self, state: TradingState):
-        raise NotImplementedError
-
-    def bid(self):
-        raise NotImplementedError
-
-    def run(self, state):
-        raise NotImplementedError
-
-
-class TutorialTrader(BaseTrader):
-    pos_limits: dict[Product, int] = {
-        "EMERALDS": 80,
-        "TOMATOES": 80,
-    }
-
-    def load_state(self, state: TradingState):
-        self.state = state
-
-        # User-defined data from previous time step
-        self.data = None if state.traderData == "" else \
-            jsonpickle.loads(state.traderData)
-
-        # Divide by 100 so each step is 1 increment of time
-        self.ts = state.timestamp / 100
-
-        # Mapping from product to its denomination
-        # TODO: This is not yet used; update later once enough info.
-        self.denomination_map = {
-            symbol: listing.denomination
-            for symbol, listing in state.listings.items()
-        }
-
-        # Mapping from product to its symbol
-        # TODO: It could be the case that the datamodel is outdated and
-        # some dicts are actually using Product as key but is typed as
-        # Symbol (and vice versa). For now, we can assume product ==
-        # symbol, so we actually don't use this yet. Update later once
-        # we have more info.
-        self.symbol_map = {
-            listing.product: symbol
-            for symbol, listing in state.listings.items()
-        }
-
-        # Buy orders (price, qty) sorted in descending order of price
-        # (first = best bid, last = worst bid)
-        self.buy_orders = {
-            symbol: list(map(lambda t: (int(t[0]), int(t[1])),
-                             sorted(order_depth.buy_orders.items(),
-                                    reverse=True)))
-            for symbol, order_depth in state.order_depths.items()
-        }
-
-        # Sell orders (price, qty) sorted in ascending order of price
-        # (first = best ask, last = worst ask)
-        self.sell_orders = {
-            symbol: list(map(lambda t: (int(t[0]), -int(t[1])),
-                             sorted(order_depth.sell_orders.items())))
-            for symbol, order_depth in state.order_depths.items()
-        }
-
-        # Remaining buy orders if matching were to take place
-        # In other words, if we were to submit self.orders_to_send,
-        # the matching engine will first attempt to match our buy
-        # orders with the sell orders in self.sell_orders. The result
-        # of that will be self.buy_orders_am (am = after matching).
-        # This is useful if we want to market make (for example);
-        # simply look at the first element of self.buy_orders_am for
-        # the best bid.
-        # (has same sorting as self.buy_orders)
-        self.buy_orders_am = self.buy_orders.copy()
-
-        # Remaining sell orders if matching were to take place
-        # (has same sorting as self.sell_orders)
-        self.sell_orders_am = self.sell_orders.copy()
-
-        # Our own trades on the last time step we had any trades;
-        # don't care about this for now
-        self.own_trades = state.own_trades.copy()
-
-        # Market trades made on the last time step there were any
-        # market trades
-        self.market_trades = state.market_trades.copy()
-
-        # Our current position
-        self.position = {
-            listing.product: state.position.get(listing.product, 0)
-            for listing in state.listings.values()
-        }
-
-        # Ignore for now
-        self.observations = state.observations
-
-        # To be filled in by self._run using self.send_[buy|sell]_order
-        self.orders_to_send = {listing.product: []
-                               for listing in state.listings.values()}
-
-    def max_buy_orders_left(self, product: Product):
-        """
-        The maximum number of buy orders we can still place for the
-        given product, such that position limits are not violated.
-        """
-        # It shouldn't be negative but just in case...
-        value = self.pos_limits[product] - self.position[product] - \
-            sum(qty for _, qty in self.buy_orders_am[product])
-        if value < 0:
-            logger.print(f"WARNING: bug in max_buy_orders_left")
-        return max(0, value)
-
-    def max_sell_orders_left(self, product: Product):
-        """
-        The maximum number of sell orders we can still place for the
-        given product, such that position limits are not violated.
-        """
-        # It shouldn't be negative but just in case... we use max().
-        value = self.pos_limits[product] + self.position[product] - \
-            sum(qty for _, qty in self.sell_orders_am[product])
-        if value < 0:
-            logger.print(f"WARNING: bug in max_sell_orders_left")
-        return max(0, value)
-
-    def best_bid(self, product: Product):
-        """This is AFTER MATCHING."""
-        if self.buy_orders_am[product]:
-            return self.buy_orders_am[product][0][0]
-        return None
-
-    def best_ask(self, product: Product):
-        """This is AFTER MATCHING."""
-        if self.sell_orders_am[product]:
-            return self.sell_orders_am[product][0][0]
-        return None
-
-    def best_bid_qty(self, product: Product):
-        """This is AFTER MATCHING."""
-        if self.buy_orders_am[product]:
-            return self.buy_orders_am[product][0][1]
-        return None
-
-    def best_ask_qty(self, product: Product):
-        """This is AFTER MATCHING."""
-        if self.sell_orders_am[product]:
-            return self.sell_orders_am[product][0][1]
-        return None
-
-    def send_buy_order(self, product: Product, price: int,
-                       quantity: int, msg: str = None):
-        """
-        Places a buy order, returns the quantity actually bought (it can
-        be less than the quantity specified if it would violate position
-        limits).
-        """
-        if quantity > self.max_buy_orders_left(product):
-            logger.print(f"WARNING: send_buy_order for {quantity} "
-                         f"{product} exceeds position limits")
-            quantity = self.max_buy_orders_left(product)
-
-        self.orders_to_send[product].append(
-            Order(product, price, quantity)
-        )
-        unmatched_qty = quantity
-        while unmatched_qty > 0:
-            best_ask = self.best_ask(product)
-            if best_ask is None or best_ask > price:
-                break
-            best_ask_qty = self.best_ask_qty(product)
-            match_qty = min(unmatched_qty, best_ask_qty)
-            unmatched_qty -= match_qty
-            if best_ask_qty == match_qty:
-                self.sell_orders_am[product].pop(0)
-            else:
-                self.sell_orders_am[product][0] = \
-                    (best_ask, best_ask_qty - match_qty)
-        if msg:
-            logger.print(f"BUY {quantity} {product} @ {price} ({msg})")
-
-    def send_sell_order(self, product: Product, price: int,
-                        quantity: int, msg: str = None):
-        """
-        Places a sell order, returns the quantity actually sold (it can
-        be less than the quantity specified if it would violate position
-        limits).
-        """
-        if quantity > self.max_sell_orders_left(product):
-            logger.print(f"WARNING: send_sell_order for {quantity} "
-                         f"{product} exceeds position limits")
-            quantity = self.max_sell_orders_left(product)
-
-        self.orders_to_send[product].append(Order(product, price, -quantity))
-        unmatched_qty = quantity
-        while unmatched_qty > 0:
-            best_bid = self.best_bid(product)
-            if best_bid is None or best_bid < price:
-                break
-            best_bid_qty = self.best_bid_qty(product)
-            match_qty = min(unmatched_qty, best_bid_qty)
-            unmatched_qty -= match_qty
-            if best_bid_qty == match_qty:
-                self.buy_orders_am[product].pop(0)
-            else:
-                self.buy_orders_am[product][0] = \
-                    (best_bid, best_bid_qty - match_qty)
-        if msg:
-            logger.print(f"SELL {quantity} {product} @ {price} ({msg})")
-
-    def match_buy_with_sell(self, product: Product, acceptable_price: int,
-                            max_quantity: int = None, max_depth: int = None,
-                            msg: str = None):
-        """
-        Create as many buy orders as possible to match existing
-        unmatched sell orders, while respecting position limits and
-        applying the given constraints.
-
-        acceptable_price -- max ask price we are willing to buy
-
-        max_quantity -- max quantity we are willing to buy (if None,
-        max is still capped by position limits)
-
-        max_depth -- max depth (number of distinct prices) of the order
-        book we are willing to buy (if None, no max depth)
-
-        Returns the quantity actually bought.
-        """ 
-        if max_quantity is None:
-            max_quantity = self.max_buy_orders_left(product)
-        else:
-            max_quantity = min(max_quantity, self.max_buy_orders_left(product))
-
-        qty_left = max_quantity
-        depth = 0
-        while qty_left > 0 and (max_depth is None or depth < max_depth):
-            best_ask = self.best_ask(product)
-            if best_ask is None or best_ask > acceptable_price:
-                break
-            best_ask_qty = self.best_ask_qty(product)
-            buy_qty = min(qty_left, best_ask_qty)
-            self.send_buy_order(product, best_ask, buy_qty, msg)
-            qty_left -= buy_qty
-            depth += 1
-
-        return max_quantity - qty_left
-
-    def match_sell_with_buy(self, product: Product, acceptable_price: int,
-                            max_quantity: int = None, max_depth: int = None,
-                            msg: str = None):
-        """
-        Same as match_buy_with_sell, but for sell orders.
-
-        acceptable_price -- min bid price we are willing to sell
-
-        max_quantity -- max quantity we are willing to sell (if None,
-        max is still capped by position limits)
-
-        max_depth -- max depth (number of distinct prices) of the order
-        book we are willing to sell (if None, no max depth)
-
-        Returns the quantity actually sold.
-        """
-        if max_quantity is None:
-            max_quantity = self.max_sell_orders_left(product)
-        else:
-            max_quantity = min(max_quantity, self.max_sell_orders_left(product))
-        
-        qty_left = max_quantity
-        depth = 0
-        while qty_left > 0 and (max_depth is None or depth < max_depth):
-            best_bid = self.best_bid(product)
-            if best_bid is None or best_bid < acceptable_price:
-                break
-            best_bid_qty = self.best_bid_qty(product)
-            sell_qty = min(qty_left, best_bid_qty)
-            self.send_sell_order(product, best_bid, sell_qty, msg)
-            qty_left -= sell_qty
-            depth += 1
-
-        return max_quantity - qty_left
-
-    def _run(self):
-        raise NotImplementedError
-
-    def run(self, state: TradingState):
-        try:
-            self.load_state(state)
-            self._run()
-            if self.data is None:
-                self.data = ""
-            logger.flush(state, self.orders_to_send, 0, self.data)  # no conversions this round
-            return self.orders_to_send, 0, self.data
-        except Exception as e:
-            raise e  ##### RAISE REPLACE FOR FINAL SUBMISSION #####
 
 class NormalTrader:
     def load_state(self, state: TradingState):
@@ -642,3 +352,129 @@ class RoundOneTrader(NormalTrader):
             "ASH_COATED_OSMIUM": 80,
             "INTARIAN_PEPPER_ROOT": 80,
         }
+
+class Trader(RoundOneTrader):
+    def update_pepper_root_past_sells(self, new_buys_count, new_sells):
+        # the past sells are ordered by increasing price
+
+        # remove the first new_buys_count sells; we assume these are
+        # the ones we managed to buy back
+        # a more complex but better way would be to match the prices as
+        # well, but i think for now it's good enough
+        past_sells = self.data["pepper_root"]["past_sells"]
+        assert new_buys_count <= sum(qty for _, qty in past_sells), "sum ting wong"
+        while new_buys_count > 0 and past_sells:
+            price, qty = past_sells[0]
+            if qty > new_buys_count:
+                past_sells[0] = (price, qty - new_buys_count)
+                new_buys_count = 0
+            else:
+                past_sells.pop(0)
+                new_buys_count -= qty
+
+        # add new sells to the data
+        new_sells = sorted(new_sells, key=lambda t: t[0])
+        merged = []
+        i = j = 0
+        while i < len(past_sells) and j < len(new_sells):
+            if past_sells[i][0] < new_sells[j][0]:
+                merged.append(past_sells[i])
+                i += 1
+            elif past_sells[i][0] > new_sells[j][0]:
+                merged.append(new_sells[j])
+                j += 1
+            else:
+                merged.append((past_sells[i][0], past_sells[i][1] + new_sells[j][1]))
+                i += 1
+                j += 1
+        merged.extend(past_sells[i:])
+        merged.extend(new_sells[j:])
+
+        # update data
+        self.data["pepper_root"]["past_sells"] = merged
+        # print(f"@@@ updated past sells: {self.data['pepper_root']['past_sells']}", flush=True)
+
+    def trade_ash_coated_osmium(self):
+        pass
+
+    def trade_intarian_pepper_root(self):
+        product = "INTARIAN_PEPPER_ROOT"
+
+        logger.print(f"pepper root past sells: {self.data['pepper_root']['past_sells']}")
+
+        if self.data["pepper_root"]["initial_buy_done_ts"] == -1:
+            # Buy as much as possible and as soon as possible (within
+            # position limits); don't care for how much
+            if self.worst_ask(product) is not None:
+                self.match_buy_with_sell(product, self.worst_ask(product), msg="initial buy")
+            if self.max_buy_orders_left(product) == 0:
+                self.data["pepper_root"]["initial_buy_done_ts"] = self.ts
+        else:
+            starting_price = self.data["starting_prices"].get(product, None)
+            if starting_price is None:
+                return
+            fair_price = starting_price + self.ts * 0.1
+
+            # Sell every time there is a good buy order
+            self.match_sell_with_buy(product, fair_price, msg="sell to buy back later")
+
+            # If position is currently not max, market make on the buy side,
+            # but make sure the trade is profitable with respect to past sells
+            # Here we just set our buy price = min past sell price - 1, which
+            # guarantees profit (if filled before price goes too far up) but
+            # maybe not optimal.
+            assert self.max_buy_orders_left(product) == \
+                sum(qty for _, qty in self.data["pepper_root"]["past_sells"]), \
+                "sum ting wong"
+            best_bid = self.best_bid(product)
+            if best_bid is None:
+                best_bid = 0
+            if self.data["pepper_root"]["past_sells"]:
+                min_past_sell_price = self.data["pepper_root"]["past_sells"][0][0]
+                self.send_buy_order(product, max(min_past_sell_price - 1, best_bid + 1),
+                                    self.max_buy_orders_left(product), msg="buy back")
+
+    def _run(self):
+        if self.data is None:
+            self.data = {
+                "starting_prices": {},
+                "pepper_root": {
+                    "initial_buy_done_ts": -1,
+                    "last_own_trade_ts": -1,
+                    "past_sells": [],  # list of (price, quantity) of past sells
+                }
+            }
+        
+        # Set starting price if not already set (applies to both products;
+        # we expect osmium to stay around 10000 while pepper root goes up
+        # about 0.1 per tick)
+        for symbol in self.symbol_map:
+            if symbol not in self.data["starting_prices"]:
+                worst_ask = self.worst_ask(symbol)
+                worst_bid = self.worst_bid(symbol)
+                if worst_ask is not None and worst_bid is not None:
+                    raw_mid = (worst_ask + worst_bid) // 2
+                    # Round to nearest 100 to snap to the day's
+                    # theoretical starting point
+                    # 100 is chosen because we expect the pepper root to
+                    # start at a multiple of 1000 ticks since last time
+                    self.data["starting_prices"][symbol] = \
+                        round(raw_mid / 100) * 100
+
+        # Update past sells for pepper root (we want to buy them back)
+        pepper_root_own_trades = self.own_trades.get("INTARIAN_PEPPER_ROOT", [])
+        if pepper_root_own_trades:
+            trade_ts = pepper_root_own_trades[0].timestamp // 100
+            if trade_ts > self.data["pepper_root"]["last_own_trade_ts"]:
+                self.data["pepper_root"]["last_own_trade_ts"] = trade_ts
+                initial_buy_done_ts = self.data["pepper_root"]["initial_buy_done_ts"]
+                if initial_buy_done_ts != -1 and trade_ts > initial_buy_done_ts:
+                    new_buys_count = sum(t.quantity for t in pepper_root_own_trades
+                                         if t.buyer == "SUBMISSION")
+                    new_sells = [(t.price, t.quantity) for t in pepper_root_own_trades
+                                 if t.seller == "SUBMISSION"]
+                    # print(f"@@@ nbc={new_buys_count}, ns={new_sells}, ts={self.ts}, tts={trade_ts}, pos={self.position["INTARIAN_PEPPER_ROOT"]}", flush=True)
+                    self.update_pepper_root_past_sells(new_buys_count, new_sells)
+
+        self.trade_ash_coated_osmium()
+        self.trade_intarian_pepper_root()
