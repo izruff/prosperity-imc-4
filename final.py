@@ -40,9 +40,10 @@ def generate_final_script(fname):
     dummy_logger_code = """
 class Logger:
     def print(self, *args, **kwargs):
-        pass
+        print(*args, **kwargs)
     def flush(self, *args, **kwargs):
-        pass
+        pass  #TODO
+        
 """
 
     if logger_match:
